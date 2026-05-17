@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-Job Auto Apply — Unified CLI launcher
+Job Auto Apply — Unified async launcher
 Applies to jobs on LinkedIn, Indeed, and Naukri simultaneously.
 """
 
 import sys
+import asyncio
 import yaml
 import logging
 import colorlog
-import threading
 from pathlib import Path
 
-# ── Logging setup ─────────────────────────────────────────────
 
 def setup_logging():
     handler = colorlog.StreamHandler()
@@ -19,27 +18,25 @@ def setup_logging():
         "%(log_color)s%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%H:%M:%S",
         log_colors={
-            "DEBUG": "cyan",
-            "INFO": "green",
-            "WARNING": "yellow",
-            "ERROR": "red",
+            "DEBUG":    "cyan",
+            "INFO":     "green",
+            "WARNING":  "yellow",
+            "ERROR":    "red",
             "CRITICAL": "bold_red",
         },
     ))
     logging.basicConfig(level=logging.INFO, handlers=[handler])
 
-# ── Config loader ─────────────────────────────────────────────
 
 def load_config(path: str = "config.yaml") -> dict:
-    config_path = Path(path)
-    if not config_path.exists():
-        print(f"\n[ERROR] config.yaml not found.")
+    p = Path(path)
+    if not p.exists():
+        print("\n[ERROR] config.yaml not found.")
         print("  → Copy config.example.yaml to config.yaml and fill in your details.\n")
         sys.exit(1)
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(p, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-# ── Platform menu ─────────────────────────────────────────────
 
 PLATFORMS = {
     "1": ("LinkedIn", "bots.linkedin_bot", "LinkedInBot"),
@@ -47,72 +44,63 @@ PLATFORMS = {
     "3": ("Naukri",   "bots.naukri_bot",   "NaukriBot"),
 }
 
+
 def print_menu():
-    print("\n" + "=" * 50)
-    print("  Job Auto Apply — Multi-Platform Bot")
-    print("=" * 50)
-    print("  Which platforms do you want to apply on?")
-    print()
+    print("\n" + "=" * 52)
+    print("   Job Auto Apply  —  LinkedIn · Indeed · Naukri")
+    print("=" * 52)
     for key, (name, _, _) in PLATFORMS.items():
-        print(f"  [{key}] {name}")
-    print("  [4] All platforms simultaneously")
-    print("  [0] Exit")
-    print("=" * 50)
+        print(f"   [{key}]  {name}")
+    print("   [4]  All platforms simultaneously")
+    print("   [0]  Exit")
+    print("=" * 52)
 
-def get_bot_instance(key: str, config: dict):
+
+def get_bot(key: str, config: dict):
     import importlib
-    _, module_path, class_name = PLATFORMS[key]
-    module = importlib.import_module(module_path)
-    cls = getattr(module, class_name)
-    return cls(config)
+    _, mod_path, cls_name = PLATFORMS[key]
+    mod = importlib.import_module(mod_path)
+    return getattr(mod, cls_name)(config)
 
-def run_bot(key: str, config: dict):
-    bot = get_bot_instance(key, config)
+
+async def run_bot(key: str, config: dict):
+    bot = get_bot(key, config)
     try:
-        bot.run()
+        await bot.run()
     except Exception as e:
         logging.getLogger(PLATFORMS[key][0]).error(f"Bot crashed: {e}", exc_info=True)
 
-# ── Main ──────────────────────────────────────────────────────
 
-def main():
+async def run_all(config: dict):
+    await asyncio.gather(
+        *(run_bot(k, config) for k in PLATFORMS)
+    )
+
+
+async def main():
     setup_logging()
     config = load_config()
-
     print_menu()
-    choice = input("\n  Enter choice: ").strip()
+    choice = input("\n   Enter choice: ").strip()
 
     if choice == "0":
-        print("  Goodbye!")
-        sys.exit(0)
+        print("   Goodbye!")
 
     elif choice in PLATFORMS:
         name = PLATFORMS[choice][0]
-        print(f"\n  Starting {name} bot... (close the browser window to stop)\n")
-        run_bot(choice, config)
+        print(f"\n   Starting {name}...\n")
+        await run_bot(choice, config)
 
     elif choice == "4":
-        print("\n  Starting all platforms simultaneously...\n")
-        threads = []
-        for key in PLATFORMS:
-            t = threading.Thread(
-                target=run_bot,
-                args=(key, config),
-                name=PLATFORMS[key][0],
-                daemon=True,
-            )
-            threads.append(t)
-            t.start()
-
-        for t in threads:
-            t.join()
+        print("\n   Starting all three platforms simultaneously...\n")
+        await run_all(config)
 
     else:
-        print("  Invalid choice.")
+        print("   Invalid choice.")
         sys.exit(1)
 
-    print("\n  All done! Check the logs above for results.")
+    print("\n   Done! Check the logs above for results.")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

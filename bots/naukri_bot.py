@@ -1,245 +1,240 @@
-import time
+import asyncio
 import logging
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import Select
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 from core.base_bot import BaseBot
 from core.qa_engine import QAEngine
 
 logger = logging.getLogger(__name__)
 
+HOME_URL  = "https://www.naukri.com/"
 LOGIN_URL = "https://www.naukri.com/nlogin/login"
-JOBS_URL = "https://www.naukri.com/{keywords}-jobs?jobAge=7"
+JOBS_URL  = "https://www.naukri.com/{keywords}-jobs?jobAge=7"
 
 
 class NaukriBot(BaseBot):
     def __init__(self, config: dict):
         super().__init__(config, "naukri")
-        self.creds = config["naukri"]
+        self.creds  = config["naukri"]
         self.search = config["search"]
-        self.qa = QAEngine(config)
+        self.qa     = QAEngine(config)
 
-    def login(self):
-        self.driver.get("https://www.naukri.com/")
-        self.random_sleep(2, 3)
+    # ── Auth ──────────────────────────────────────────────────
 
-        # Check if already logged in
-        try:
-            self.driver.find_element(By.CLASS_NAME, "nI-gNb-drawer__icon")
+    async def login(self):
+        if await self.is_logged_in(HOME_URL, ".nI-gNb-drawer__icon, .nI-gNb-menuItem"):
             logger.info("[Naukri] Already logged in via saved session.")
             return
-        except NoSuchElementException:
-            pass
 
-        self.driver.get(LOGIN_URL)
-        self.random_sleep(2, 3)
+        await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
+        await self.sleep(2, 3)
+        await self.human_type("#usernameField", self.creds["email"])
+        await self.human_type("#passwordField", self.creds["password"])
+        await self.click("button[type='submit']:has-text('Login')")
+        await self.sleep(4, 6)
+        logger.info("[Naukri] Logged in.")
 
-        email_field = self.find(By.ID, "usernameField")
-        pass_field = self.find(By.ID, "passwordField")
-        if not email_field or not pass_field:
-            logger.error("[Naukri] Login fields not found.")
-            return
-
-        self.human_type(email_field, self.creds["email"])
-        self.human_type(pass_field, self.creds["password"])
-        self.click(By.XPATH, "//button[@type='submit' and contains(text(),'Login')]")
-        self.random_sleep(3, 5)
-        logger.info("[Naukri] Logged in successfully.")
-
-    def update_profile(self):
-        """Bumps your Naukri profile to top of recruiter searches."""
+    async def _bump_profile(self):
+        """Refreshes Naukri profile so it appears at top of recruiter searches."""
         try:
-            self.driver.get("https://www.naukri.com/mnjuser/profile")
-            self.random_sleep(2, 3)
-            save_btn = self.find(By.XPATH, "//button[contains(text(),'Save')]", timeout=5)
-            if save_btn:
-                save_btn.click()
-                self.random_sleep(1, 2)
-                logger.info("[Naukri] Profile updated (bumped to top).")
+            await self.page.goto(
+                "https://www.naukri.com/mnjuser/profile",
+                wait_until="domcontentloaded",
+            )
+            await self.sleep(2, 3)
+            save = self.page.locator("button:has-text('Save')").first
+            if await save.count():
+                await save.click()
+                await self.sleep(1, 2)
+                logger.info("[Naukri] Profile bumped to top.")
         except Exception as e:
-            logger.warning(f"[Naukri] Profile update failed: {e}")
+            logger.warning(f"[Naukri] Profile bump failed: {e}")
 
-    def run(self):
-        self.start()
-        self.login()
-        self.update_profile()
+    # ── Main run loop ─────────────────────────────────────────
+
+    async def run(self):
+        await self.start()
+        await self.login()
+        await self._bump_profile()
 
         keywords = self.search.get("keywords", "software-developer")
         slug = keywords.lower().replace(" ", "-")
-        url = JOBS_URL.format(keywords=slug)
+        url  = JOBS_URL.format(keywords=slug)
 
-        self.driver.get(url)
-        self.random_sleep(3, 5)
+        await self.page.goto(url, wait_until="domcontentloaded")
+        await self.sleep(3, 5)
 
         while self.applied_count < self.max_applications:
-            job_tuples = self._get_job_links()
-            if not job_tuples:
+            links = await self._collect_job_links()
+            if not links:
                 logger.info("[Naukri] No more jobs found.")
                 break
 
-            for job_url in job_tuples:
+            for link in links:
                 if self.applied_count >= self.max_applications:
                     break
                 try:
-                    self.driver.get(job_url)
-                    self.random_sleep(2, 4)
-                    self._apply_to_job()
+                    await self.page.goto(link, wait_until="domcontentloaded")
+                    await self.sleep(2, 4)
+                    await self._apply()
                 except Exception as e:
                     logger.warning(f"[Naukri] Skipping job: {e}")
-                    continue
 
-            if not self._go_to_next_page():
+            if not await self._next_page():
                 break
 
-        self.stop()
+        await self.stop()
 
-    def _get_job_links(self) -> list:
-        cards = self.driver.find_elements(
-            By.CSS_SELECTOR, "article.jobTuple, .cust-job-tuple"
-        )
-        links = []
-        for card in cards:
-            try:
-                a = card.find_element(By.CSS_SELECTOR, "a.title, a.row1")
-                href = a.get_attribute("href")
-                if href:
-                    links.append(href)
-            except NoSuchElementException:
-                pass
-        return links
+    # ── Apply flow ────────────────────────────────────────────
 
-    def _apply_to_job(self):
-        apply_btn = self.find(
-            By.XPATH,
-            "//button[contains(text(),'Apply') and not(contains(text(),'Applied'))]",
-            timeout=5,
-        )
-        if not apply_btn:
+    async def _apply(self):
+        apply_btn = self.page.locator(
+            "button:has-text('Apply'), a:has-text('Apply')"
+        ).first
+        try:
+            await apply_btn.wait_for(timeout=5000)
+            btn_text = await apply_btn.inner_text()
+            if "Applied" in btn_text:
+                return
+            await apply_btn.click()
+        except PlaywrightTimeout:
             return
 
-        apply_btn.click()
-        self.random_sleep(2, 3)
+        await self.sleep(2, 3)
 
-        # Handle apply modal / chatbot
-        max_steps = 8
-        for _ in range(max_steps):
-            self.random_sleep(1, 2)
+        for _ in range(8):
+            await self.sleep(1, 2)
+            await self._fill_modal()
 
-            # Fill text fields in modal
-            for inp in self.driver.find_elements(
-                By.CSS_SELECTOR,
-                "div.chatbot_DrawerContentWrapper input[type='text'], "
-                "div.chatbot_DrawerContentWrapper input[type='number'], "
-                "div.chatbot_DrawerContentWrapper textarea, "
-                "div.apply-question input, div.apply-question textarea",
-            ):
-                try:
-                    if inp.get_attribute("value"):
-                        continue
-                    label = self._get_question_text(inp)
-                    answer = self.qa.answer(label)
-                    if answer:
-                        self.human_type(inp, answer)
-                except Exception:
-                    pass
-
-            # Dropdowns
-            for sel in self.driver.find_elements(By.CSS_SELECTOR, "select"):
-                try:
-                    label = self._get_question_text(sel)
-                    answer = self.qa.answer(label)
-                    s = Select(sel)
-                    for opt in s.options:
-                        if answer.lower() in opt.text.lower():
-                            s.select_by_visible_text(opt.text)
-                            break
-                except Exception:
-                    pass
-
-            # Radio buttons
-            for radio in self.driver.find_elements(By.CSS_SELECTOR, "input[type='radio']"):
-                try:
-                    if radio.is_selected():
-                        continue
-                    label_el = self.driver.find_element(
-                        By.XPATH, f"//label[@for='{radio.get_attribute(\"id\")}']"
-                    )
-                    q_text = self._get_question_text(radio)
-                    answer = self.qa.answer(q_text)
-                    if answer.lower() in label_el.text.lower():
-                        radio.click()
-                except Exception:
-                    pass
+            # Check success
+            success = self.page.locator(
+                "text=Successfully Applied, text=applied successfully"
+            )
+            if await success.count():
+                self.applied_count += 1
+                logger.info(f"[Naukri] Applied! Total: {self.applied_count}")
+                await self._close_modal()
+                return
 
             # Submit
-            if self._click_button(["Submit", "Apply"]):
-                # Check if "Applied" confirmation appeared
-                self.random_sleep(1, 2)
-                success = self.driver.find_elements(
-                    By.XPATH, "//*[contains(text(),'Successfully Applied') or contains(text(),'applied successfully')]"
-                )
-                if success:
+            submit = self.page.locator(
+                "button:has-text('Submit'), button:has-text('Apply')"
+            ).last
+            if await submit.count():
+                await submit.click()
+                await self.sleep(1, 2)
+                if await self.page.locator(
+                    "text=Successfully Applied, text=applied successfully"
+                ).count():
                     self.applied_count += 1
                     logger.info(f"[Naukri] Applied! Total: {self.applied_count}")
-                    self._close_modal()
+                    await self._close_modal()
                     return
 
             # Next / Continue
-            if not self._click_button(["Next", "Continue", "Proceed"]):
+            progressed = False
+            for label in ["Next", "Continue", "Proceed"]:
+                btn = self.page.locator(f"button:has-text('{label}')").first
+                if await btn.count():
+                    await btn.click()
+                    await self.sleep(1, 2)
+                    progressed = True
+                    break
+            if not progressed:
                 break
 
-        self._close_modal()
+        await self._close_modal()
 
-    def _get_question_text(self, element) -> str:
-        try:
-            el_id = element.get_attribute("id")
-            if el_id:
-                label = self.driver.find_element(By.XPATH, f"//label[@for='{el_id}']")
-                return label.text
-        except Exception:
-            pass
-        try:
-            return (
-                element.find_element(By.XPATH, "ancestor::div[contains(@class,'question')]//p").text
-            )
-        except Exception:
-            pass
-        return element.get_attribute("placeholder") or element.get_attribute("aria-label") or ""
+    async def _fill_modal(self):
+        resume = self.config["personal"].get("resume_path", "")
 
-    def _click_button(self, labels: list) -> bool:
-        for label in labels:
+        # Resume upload
+        if resume:
+            upload = self.page.locator("input[type='file']").first
+            if await upload.count():
+                try:
+                    await upload.set_input_files(resume)
+                    await self.sleep(1, 2)
+                except Exception:
+                    pass
+
+        # Text / number / textarea inside apply drawer/modal
+        scope = (
+            "div.chatbot_DrawerContentWrapper input[type='text'], "
+            "div.chatbot_DrawerContentWrapper input[type='number'], "
+            "div.chatbot_DrawerContentWrapper textarea, "
+            "div.apply-question input, "
+            "div.apply-question textarea"
+        )
+        for inp in await self.page.locator(scope).all():
             try:
-                btn = self.driver.find_element(
-                    By.XPATH,
-                    f"//button[contains(text(),'{label}')] | //input[@value='{label}']",
-                )
-                btn.click()
-                self.random_sleep(1, 2)
-                return True
-            except NoSuchElementException:
+                if await inp.input_value():
+                    continue
+                label = await self.get_label_for(inp)
+                answer = self.qa.answer(label)
+                if answer:
+                    await self.human_type_el(inp, answer)
+            except Exception:
                 pass
-        return False
 
-    def _close_modal(self):
-        for selector in [
-            "//button[@class='close-btn']",
-            "//span[@class='close-icon']",
-            "//button[contains(@class,'close')]",
+        # Selects
+        for sel in await self.page.locator("select").all():
+            try:
+                label  = await self.get_label_for(sel)
+                answer = self.qa.answer(label)
+                opts   = await sel.locator("option").all_inner_texts()
+                match  = next((o for o in opts if answer.lower() in o.lower()), None)
+                if match:
+                    await sel.select_option(label=match)
+            except Exception:
+                pass
+
+        # Radios
+        for radio in await self.page.locator("input[type='radio']").all():
+            try:
+                if await radio.is_checked():
+                    continue
+                rid = await radio.get_attribute("id")
+                label_el = self.page.locator(f"label[for='{rid}']")
+                label_text = await label_el.inner_text()
+                fieldset = radio.locator("xpath=ancestor::fieldset").first
+                q_text = await fieldset.locator("legend").inner_text()
+                answer = self.qa.answer(q_text)
+                if answer.lower() in label_text.lower():
+                    await radio.click()
+            except Exception:
+                pass
+
+    async def _collect_job_links(self) -> list:
+        cards = await self.page.locator(
+            "article.jobTuple, .cust-job-tuple"
+        ).all()
+        links = []
+        for card in cards:
+            try:
+                a = card.locator("a.title, a.row1").first
+                href = await a.get_attribute("href")
+                if href:
+                    links.append(href)
+            except Exception:
+                pass
+        return links
+
+    async def _close_modal(self):
+        for sel in [
+            "button.close-btn",
+            "span.close-icon",
+            "button[class*='close']",
         ]:
-            try:
-                self.driver.find_element(By.XPATH, selector).click()
-                self.random_sleep(1, 2)
+            if await self.click(sel, timeout=3000):
+                await self.sleep(1, 2)
                 return
-            except NoSuchElementException:
-                pass
 
-    def _go_to_next_page(self) -> bool:
-        try:
-            next_btn = self.driver.find_element(
-                By.CSS_SELECTOR, "a.pagination-btn.rightBtn, a[title='Next']"
-            )
-            next_btn.click()
-            self.random_sleep(3, 5)
+    async def _next_page(self) -> bool:
+        btn = self.page.locator(
+            "a.pagination-btn.rightBtn, a[title='Next']"
+        ).first
+        if await btn.count():
+            await btn.click()
+            await self.sleep(3, 5)
             return True
-        except NoSuchElementException:
-            return False
+        return False

@@ -1,88 +1,114 @@
-import time
+import asyncio
 import random
 import logging
 from pathlib import Path
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from webdriver_manager.chrome import ChromeDriverManager
+from playwright.async_api import async_playwright, Page, BrowserContext, Playwright
 
 logger = logging.getLogger(__name__)
+
+STEALTH_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+window.chrome = { runtime: {} };
+"""
 
 
 class BaseBot:
     def __init__(self, config: dict, platform: str):
         self.config = config
         self.platform = platform
-        self.driver = None
-        self.wait = None
         self.applied_count = 0
         self.max_applications = config["search"].get("max_applications", 50)
         self.profile_dir = Path(__file__).parent.parent / "profile" / platform
+        self.profile_dir.mkdir(parents=True, exist_ok=True)
 
-    def _build_driver(self) -> webdriver.Chrome:
-        options = Options()
-        options.add_argument(f"--user-data-dir={self.profile_dir}")
-        options.add_argument("--start-maximized")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
+        self._playwright: Playwright = None
+        self.context: BrowserContext = None
+        self.page: Page = None
 
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    async def start(self):
+        self._playwright = await async_playwright().start()
+        self.context = await self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(self.profile_dir),
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ],
         )
-        return driver
-
-    def start(self):
-        self.driver = self._build_driver()
-        self.wait = WebDriverWait(self.driver, 15)
+        self.context.on("page", self._on_new_page)
+        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+        await self.page.add_init_script(STEALTH_SCRIPT)
         logger.info(f"[{self.platform}] Browser started.")
 
-    def stop(self):
-        if self.driver:
-            self.driver.quit()
-            logger.info(f"[{self.platform}] Browser closed. Applied: {self.applied_count}")
+    async def _on_new_page(self, page: Page):
+        await page.add_init_script(STEALTH_SCRIPT)
 
-    def human_type(self, element, text: str):
-        element.clear()
-        for char in str(text):
-            element.send_keys(char)
-            time.sleep(random.uniform(0.03, 0.10))
+    async def stop(self):
+        if self.context:
+            await self.context.close()
+        if self._playwright:
+            await self._playwright.stop()
+        logger.info(f"[{self.platform}] Browser closed. Applied: {self.applied_count}")
 
-    def random_sleep(self, min_sec: float = 1.0, max_sec: float = 3.0):
-        time.sleep(random.uniform(min_sec, max_sec))
+    async def human_type(self, selector: str, text: str, clear: bool = True):
+        if clear:
+            await self.page.fill(selector, "")
+        await self.page.type(selector, str(text), delay=random.randint(40, 100))
 
-    def find(self, by: By, value: str, timeout: int = 10):
+    async def human_type_el(self, element, text: str):
+        await element.fill("")
+        await element.type(str(text), delay=random.randint(40, 100))
+
+    async def sleep(self, min_sec: float = 1.0, max_sec: float = 3.0):
+        await asyncio.sleep(random.uniform(min_sec, max_sec))
+
+    async def find(self, selector: str, timeout: int = 8000):
         try:
-            return WebDriverWait(self.driver, timeout).until(
-                EC.presence_of_element_located((by, value))
-            )
-        except TimeoutException:
+            el = self.page.locator(selector).first
+            await el.wait_for(timeout=timeout)
+            return el
+        except Exception:
             return None
 
-    def click(self, by: By, value: str, timeout: int = 10) -> bool:
+    async def click(self, selector: str, timeout: int = 8000) -> bool:
         try:
-            el = WebDriverWait(self.driver, timeout).until(
-                EC.element_to_be_clickable((by, value))
-            )
-            el.click()
+            await self.page.locator(selector).first.click(timeout=timeout)
             return True
-        except TimeoutException:
+        except Exception:
             return False
 
-    def is_logged_in(self, check_url: str, logged_in_indicator: tuple) -> bool:
-        self.driver.get(check_url)
-        self.random_sleep(2, 4)
+    async def is_logged_in(self, url: str, indicator_selector: str) -> bool:
+        await self.page.goto(url, wait_until="domcontentloaded")
+        await self.sleep(2, 3)
         try:
-            self.driver.find_element(*logged_in_indicator)
+            await self.page.wait_for_selector(indicator_selector, timeout=5000)
             return True
-        except NoSuchElementException:
+        except Exception:
             return False
+
+    async def get_label_for(self, element) -> str:
+        try:
+            el_id = await element.get_attribute("id")
+            if el_id:
+                label = self.page.locator(f"label[for='{el_id}']")
+                if await label.count():
+                    return (await label.inner_text()).strip()
+        except Exception:
+            pass
+        for attr in ("placeholder", "aria-label", "name"):
+            try:
+                val = await element.get_attribute(attr)
+                if val:
+                    return val.strip()
+            except Exception:
+                pass
+        return ""

@@ -1,57 +1,52 @@
-import time
+import asyncio
 import logging
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import Select
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 from core.base_bot import BaseBot
 from core.qa_engine import QAEngine
 
 logger = logging.getLogger(__name__)
 
+HOME_URL = "https://www.indeed.com/"
 LOGIN_URL = "https://secure.indeed.com/auth?hl=en_IN&co=IN"
-JOBS_URL = "https://www.indeed.com/jobs?q={keywords}&l={location}&fromage=7&iafilter=1"
+JOBS_URL  = "https://www.indeed.com/jobs?q={keywords}&l={location}&fromage=7&iafilter=1"
 
 
 class IndeedBot(BaseBot):
     def __init__(self, config: dict):
         super().__init__(config, "indeed")
-        self.creds = config["indeed"]
+        self.creds  = config["indeed"]
         self.search = config["search"]
-        self.qa = QAEngine(config)
+        self.qa     = QAEngine(config)
 
-    def login(self):
-        self.driver.get("https://www.indeed.com/")
-        self.random_sleep(2, 3)
+    # ── Auth ──────────────────────────────────────────────────
 
-        try:
-            self.driver.find_element(By.ID, "jobsearch-SerpJobCard")
+    async def login(self):
+        await self.page.goto(HOME_URL, wait_until="domcontentloaded")
+        await self.sleep(2, 3)
+
+        # Check session via sign-in link absence
+        if not await self.page.locator("a[href*='login'], a[href*='signin']").count():
             logger.info("[Indeed] Already logged in via saved session.")
             return
-        except NoSuchElementException:
-            pass
 
-        self.driver.get(LOGIN_URL)
-        self.random_sleep(2, 3)
+        await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
+        await self.sleep(2, 3)
 
-        email_field = self.find(By.ID, "ifl-InputFormField-3")
-        if not email_field:
-            email_field = self.find(By.CSS_SELECTOR, "input[type='email']")
-        if email_field:
-            self.human_type(email_field, self.creds["email"])
-            self.click(By.CSS_SELECTOR, "button[type='submit']")
-            self.random_sleep(2, 3)
+        email_sel = "input[type='email'], input[name='__email'], #ifl-InputFormField-3"
+        await self.human_type(email_sel, self.creds["email"])
+        await self.click("button[type='submit']")
+        await self.sleep(2, 3)
 
-        pass_field = self.find(By.CSS_SELECTOR, "input[type='password']")
-        if pass_field:
-            self.human_type(pass_field, self.creds["password"])
-            self.click(By.CSS_SELECTOR, "button[type='submit']")
-            self.random_sleep(3, 5)
+        await self.human_type("input[type='password']", self.creds["password"])
+        await self.click("button[type='submit']")
+        await self.sleep(4, 6)
+        logger.info("[Indeed] Login attempted — solve CAPTCHA in browser if prompted.")
 
-        logger.info("[Indeed] Login attempted — complete CAPTCHA manually if prompted.")
+    # ── Main run loop ─────────────────────────────────────────
 
-    def run(self):
-        self.start()
-        self.login()
+    async def run(self):
+        await self.start()
+        await self.login()
 
         keywords = self.search.get("keywords", "Software Engineer")
         location = self.search.get("location", "India")
@@ -59,164 +54,169 @@ class IndeedBot(BaseBot):
             keywords=keywords.replace(" ", "+"),
             location=location.replace(" ", "+"),
         )
-
-        self.driver.get(url)
-        self.random_sleep(3, 5)
+        await self.page.goto(url, wait_until="domcontentloaded")
+        await self.sleep(3, 5)
 
         while self.applied_count < self.max_applications:
-            job_cards = self.driver.find_elements(
-                By.CSS_SELECTOR, "div.job_seen_beacon, .resultContent"
-            )
-            if not job_cards:
+            cards = await self.page.locator(
+                "div.job_seen_beacon, .resultContent"
+            ).all()
+            if not cards:
                 logger.info("[Indeed] No job cards found.")
                 break
 
-            for card in job_cards:
+            for card in cards:
                 if self.applied_count >= self.max_applications:
                     break
                 try:
-                    easily_apply = card.find_elements(
-                        By.XPATH, ".//*[contains(text(),'Easily apply') or contains(text(),'Easy Apply')]"
+                    easy_apply = card.locator(
+                        "text=Easily apply, text=Easy Apply"
                     )
-                    if not easily_apply:
+                    if not await easy_apply.count():
                         continue
-
-                    title = card.find_element(By.CSS_SELECTOR, "h2 a, .jobTitle a")
-                    title.click()
-                    self.random_sleep(2, 4)
-                    self._apply_in_new_tab()
+                    title = card.locator("h2 a, .jobTitle a").first
+                    await title.click()
+                    await self.sleep(2, 4)
+                    await self._apply()
                 except Exception as e:
                     logger.warning(f"[Indeed] Skipping card: {e}")
-                    continue
 
-            if not self._go_to_next_page():
+            if not await self._next_page():
                 break
 
-        self.stop()
+        await self.stop()
 
-    def _apply_in_new_tab(self):
-        original = self.driver.current_window_handle
-        tabs_before = set(self.driver.window_handles)
+    # ── Apply flow ────────────────────────────────────────────
 
-        apply_btn = self.find(
-            By.XPATH,
-            "//button[contains(text(),'Apply now') or contains(text(),'Apply on company')]",
-            timeout=5,
-        )
-        if not apply_btn:
+    async def _apply(self):
+        apply_btn = self.page.locator(
+            "button:has-text('Apply now'), button:has-text('Apply on')"
+        ).first
+        try:
+            await apply_btn.wait_for(timeout=5000)
+        except PlaywrightTimeout:
             return
 
-        apply_btn.click()
-        self.random_sleep(2, 3)
+        # Playwright handles new tab natively
+        async with self.context.expect_page() as new_page_info:
+            await apply_btn.click()
 
-        new_tabs = set(self.driver.window_handles) - tabs_before
-        if new_tabs:
-            self.driver.switch_to.window(new_tabs.pop())
-            self._fill_indeed_form()
-            self.driver.close()
-            self.driver.switch_to.window(original)
-        else:
-            self._fill_indeed_form()
+        try:
+            new_page: Page = await new_page_info.value
+            await new_page.wait_for_load_state("domcontentloaded")
+            await self._fill_form(new_page)
+            await new_page.close()
+        except Exception:
+            # No new tab — form is inline
+            await self._fill_form(self.page)
 
-    def _fill_indeed_form(self):
-        resume_path = self.config["personal"].get("resume_path", "")
+    async def _fill_form(self, page: Page):
+        resume = self.config["personal"].get("resume_path", "")
         max_steps = 10
 
         for _ in range(max_steps):
-            self.random_sleep(1, 2)
+            await asyncio.sleep(1.5)
 
             # Resume upload
-            try:
-                upload = self.driver.find_element(By.CSS_SELECTOR, "input[type='file']")
-                if resume_path:
-                    upload.send_keys(resume_path)
-                    self.random_sleep(1, 2)
-            except NoSuchElementException:
-                pass
+            if resume:
+                upload = page.locator("input[type='file']").first
+                if await upload.count():
+                    try:
+                        await upload.set_input_files(resume)
+                        await asyncio.sleep(1)
+                    except Exception:
+                        pass
 
-            # Text fields
-            for inp in self.driver.find_elements(
-                By.CSS_SELECTOR, "input[type='text'], input[type='number'], textarea"
-            ):
+            # Text / number / textarea
+            for inp in await page.locator(
+                "input[type='text'], input[type='number'], textarea"
+            ).all():
                 try:
-                    if inp.get_attribute("value"):
+                    if await inp.input_value():
                         continue
-                    label = self._get_label_for(inp)
+                    label = await self._get_label(page, inp)
                     answer = self.qa.answer(label)
                     if answer:
-                        self.human_type(inp, answer)
+                        await inp.fill("")
+                        await inp.type(answer, delay=50)
                 except Exception:
                     pass
 
-            # Dropdowns
-            for sel in self.driver.find_elements(By.TAG_NAME, "select"):
+            # Selects
+            for sel in await page.locator("select").all():
                 try:
-                    label = self._get_label_for(sel)
+                    label  = await self._get_label(page, sel)
                     answer = self.qa.answer(label)
-                    s = Select(sel)
-                    for opt in s.options:
-                        if answer.lower() in opt.text.lower():
-                            s.select_by_visible_text(opt.text)
-                            break
+                    opts   = await sel.locator("option").all_inner_texts()
+                    match  = next((o for o in opts if answer.lower() in o.lower()), None)
+                    if match:
+                        await sel.select_option(label=match)
                 except Exception:
                     pass
 
-            # Radio / checkbox
-            for radio in self.driver.find_elements(By.CSS_SELECTOR, "input[type='radio']"):
+            # Radios
+            for radio in await page.locator("input[type='radio']").all():
                 try:
-                    if radio.is_selected():
+                    if await radio.is_checked():
                         continue
-                    label_el = radio.find_element(By.XPATH, "following-sibling::label")
-                    label_text = label_el.text
-                    q_container = radio.find_element(By.XPATH, "ancestor::fieldset//legend")
-                    answer = self.qa.answer(q_container.text)
+                    rid = await radio.get_attribute("id")
+                    label_el = page.locator(f"label[for='{rid}']")
+                    label_text = await label_el.inner_text()
+                    fieldset = radio.locator("xpath=ancestor::fieldset").first
+                    q_text = await fieldset.locator("legend").inner_text()
+                    answer = self.qa.answer(q_text)
                     if answer.lower() in label_text.lower():
-                        radio.click()
+                        await radio.click()
                 except Exception:
                     pass
 
             # Submit
-            if self._click_button(["Submit your application", "Submit application"]):
+            submit = page.locator(
+                "button:has-text('Submit your application'), "
+                "button:has-text('Submit application')"
+            ).first
+            if await submit.count():
+                await submit.click()
+                await asyncio.sleep(2)
                 self.applied_count += 1
                 logger.info(f"[Indeed] Applied! Total: {self.applied_count}")
-                self.random_sleep(2, 3)
                 return
 
-            # Continue / Next
-            if not self._click_button(["Continue", "Next", "Review your application"]):
+            # Next / Continue
+            continued = False
+            for label in ["Continue", "Next", "Review your application"]:
+                btn = page.locator(f"button:has-text('{label}')").first
+                if await btn.count():
+                    await btn.click()
+                    await asyncio.sleep(1.5)
+                    continued = True
+                    break
+            if not continued:
                 logger.warning("[Indeed] Could not progress form — skipping.")
                 return
 
-    def _click_button(self, labels: list) -> bool:
-        for label in labels:
-            try:
-                btn = self.driver.find_element(
-                    By.XPATH, f"//button[contains(text(),'{label}')]"
-                )
-                btn.click()
-                self.random_sleep(1, 2)
-                return True
-            except NoSuchElementException:
-                pass
-        return False
-
-    def _get_label_for(self, element) -> str:
+    async def _get_label(self, page: Page, element) -> str:
         try:
-            el_id = element.get_attribute("id")
+            el_id = await element.get_attribute("id")
             if el_id:
-                label = self.driver.find_element(By.XPATH, f"//label[@for='{el_id}']")
-                return label.text
+                label = page.locator(f"label[for='{el_id}']")
+                if await label.count():
+                    return (await label.inner_text()).strip()
         except Exception:
             pass
-        return element.get_attribute("placeholder") or element.get_attribute("aria-label") or ""
+        for attr in ("placeholder", "aria-label", "name"):
+            try:
+                val = await element.get_attribute(attr)
+                if val:
+                    return val.strip()
+            except Exception:
+                pass
+        return ""
 
-    def _go_to_next_page(self) -> bool:
-        try:
-            next_btn = self.driver.find_element(
-                By.CSS_SELECTOR, "a[data-testid='pagination-page-next']"
-            )
-            next_btn.click()
-            self.random_sleep(3, 5)
+    async def _next_page(self) -> bool:
+        btn = self.page.locator("a[data-testid='pagination-page-next']").first
+        if await btn.count():
+            await btn.click()
+            await self.sleep(3, 5)
             return True
-        except NoSuchElementException:
-            return False
+        return False
