@@ -47,7 +47,8 @@ PLATFORMS = {
 
 def print_menu():
     print("\n" + "=" * 52)
-    print("   Job Auto Apply  —  LinkedIn · Indeed · Naukri")
+    print("   Job Auto Apply  -  LinkedIn | Indeed | Naukri")
+    print("   Created by zxdevelopers")
     print("=" * 52)
     for key, (name, _, _) in PLATFORMS.items():
         print(f"   [{key}]  {name}")

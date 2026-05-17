@@ -1,5 +1,7 @@
 # Job Auto Apply
 
+> Created by **[zxdevelopers](https://github.com/zeeshaniskhan5)**
+
 Automate job applications across **LinkedIn**, **Indeed**, and **Naukri** from a single tool.
 
 ---
@@ -101,3 +103,9 @@ job-auto-apply/
 ## Disclaimer
 
 This tool is for personal use only. Use it responsibly and in accordance with each platform's terms of service. Applying to jobs in bulk may result in account restrictions on some platforms.
+
+---
+
+## Credits
+
+Built by **[zxdevelopers](https://github.com/zeeshaniskhan5)**
