@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────
+#  Job Auto Apply — Configuration
+#  Copy this file to config.yaml and fill in your details
+# ─────────────────────────────────────────────────────────────
+
+personal:
+  name: "Your Full Name"
+  phone: "9876543210"
+  location: "Mumbai"
+  resume_path: "C:/Users/YourName/Documents/resume.pdf"   # Absolute path to your resume PDF
+  years_of_experience: "3"
+  current_role: "Software Engineer"
+  current_company: "ABC Corp"
+  expected_salary: "15 LPA"
+  notice_period: "30 days"
+  gender: "Male"                   # Male / Female / Prefer not to say
+  linkedin_url: "https://linkedin.com/in/yourprofile"
+  portfolio_url: "https://github.com/yourprofile"
+
+# ── Platform Credentials ──────────────────────────────────────
+
+linkedin:
+  email: "your@email.com"
+  password: "yourpassword"
+
+indeed:
+  email: "your@email.com"
+  password: "yourpassword"
+
+naukri:
+  email: "your@email.com"
+  password: "yourpassword"
+
+# ── Job Search Preferences ────────────────────────────────────
+
+search:
+  keywords: "Python Developer"      # Job title / skills to search
+  location: "Mumbai"                 # City or "Remote"
+  remote: false                      # true = remote jobs only
+  max_applications: 50               # Max applications per platform per run
+
+# ── Screening Question Answers ────────────────────────────────
+# Add any custom keyword → answer mappings here.
+# The bot will match question text to these keywords automatically.
+
+answers:
+  "years of experience": "3"
+  "notice period": "30 days"
+  "expected salary": "15 LPA"
+  "current salary": "12 LPA"
+  "willing to relocate": "Yes"
+  "work from office": "Yes"
+  "immediate joiner": "No"
+  "us citizen": "No"
+  "require sponsorship": "No"
+  "highest qualification": "Bachelor's"
+  "degree": "B.Tech"
+  "university": "Your University Name"
+  "graduation year": "2021"
+  "certifications": "None"
+  "languages known": "English, Hindi"
