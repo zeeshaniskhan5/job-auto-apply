@@ -26,7 +26,7 @@ if %errorlevel% neq 0 (
 
 REM Install Playwright browsers
 echo [3/4] Installing Playwright browser (Chromium)...
-playwright install chromium
+python -m playwright install chromium
 if %errorlevel% neq 0 (
     echo [ERROR] Playwright browser install failed.
     pause
