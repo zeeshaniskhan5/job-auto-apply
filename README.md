@@ -10,8 +10,9 @@ Automate job applications across **LinkedIn**, **Indeed**, and **Naukri** from a
 - Run all three platforms **simultaneously** or one at a time
 - Smart Q&A engine — automatically answers screening questions
 - Auto resume upload
-- Persistent Chrome sessions — log in once, never again
-- Human-like typing with randomized delays (anti-bot detection)
+- Persistent Playwright browser sessions — log in once, never again
+- Built-in stealth mode (bypasses bot detection automatically)
+- Human-like typing with per-character randomized delays
 - Profile bump on Naukri (pushes your profile to top of recruiter searches)
 - Fully configurable via a single `config.yaml` file
 
@@ -21,8 +22,9 @@ Automate job applications across **LinkedIn**, **Indeed**, and **Naukri** from a
 
 - Windows 10/11 (Mac/Linux also supported)
 - [Python 3.8+](https://www.python.org/downloads/)
-- [Google Chrome](https://www.google.com/chrome/) installed
 - Your resume as a PDF file
+
+> **No Chrome installation needed.** `setup.bat` installs Playwright's own Chromium automatically.
 
 ---
 
@@ -31,7 +33,10 @@ Automate job applications across **LinkedIn**, **Indeed**, and **Naukri** from a
 ### Step 1 — Run Setup
 Double-click `setup.bat`
 
-This installs all dependencies and creates your `config.yaml`.
+This will automatically:
+1. Install Python packages (`playwright`, `pyyaml`, `colorlog`)
+2. Download Playwright's Chromium browser
+3. Create your `config.yaml` from the example template
 
 ### Step 2 — Edit config.yaml
 Open `config.yaml` and fill in:
@@ -64,7 +69,7 @@ job-auto-apply/
 │   ├── indeed_bot.py        # Indeed Smart Apply automation
 │   └── naukri_bot.py        # Naukri Apply automation
 ├── core/
-│   ├── base_bot.py          # Shared Selenium setup & helpers
+│   ├── base_bot.py          # Shared Playwright async browser setup & helpers
 │   └── qa_engine.py         # Keyword-based Q&A answering engine
 ├── profile/                 # Saved Chrome sessions (auto-created)
 │   ├── linkedin/
@@ -83,11 +88,13 @@ job-auto-apply/
 
 ## Tips
 
-- **First run:** The browser will open and log you in. After that, sessions are saved and login is automatic.
-- **CAPTCHA:** If a CAPTCHA appears, solve it manually in the browser — the bot will continue after.
+- **First run:** The Playwright browser opens and logs you in. Sessions are saved in `profile/` — future runs skip login entirely.
+- **All 3 simultaneously:** Choose option `[4]` — platforms run in parallel via `asyncio.gather()`, each in its own browser window.
+- **CAPTCHA:** Solve it manually in the browser window — the bot waits and continues automatically after.
 - **Max applications:** Set `max_applications` in `config.yaml` to control how many jobs each platform applies to per run.
-- **Screening questions:** Add your custom answers under `answers:` in `config.yaml` using keywords from the questions you're asked.
-- **Resume path:** Use the full absolute path, e.g. `C:/Users/YourName/Documents/resume.pdf`
+- **Screening questions:** Add keyword → answer pairs under `answers:` in `config.yaml`. The bot matches question text to your keywords automatically.
+- **Resume path:** Use the full absolute path with forward slashes, e.g. `C:/Users/YourName/Documents/resume.pdf`
+- **No Chrome needed:** Playwright ships its own Chromium — your system Chrome is untouched.
 
 ---
 
