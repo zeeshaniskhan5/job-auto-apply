@@ -159,57 +159,99 @@ class LinkedInBot(BaseBot):
 
         await self._dismiss()
 
+    # Fields to always skip — not application questions
+    SKIP_LABELS = {
+        "search", "filter", "recaptcha", "g-recaptcha", "captcha",
+        "add a company", "date posted", "city, state", "title, skill",
+        "job title", "location", "search by", "sort by",
+    }
+
+    def _is_junk_label(self, label: str) -> bool:
+        label_lower = label.lower().strip()
+        return any(skip in label_lower for skip in self.SKIP_LABELS)
+
+    async def _get_modal(self):
+        """Return the Easy Apply modal locator — scopes all field filling inside it."""
+        for sel in [
+            "div.jobs-easy-apply-modal",
+            "div[data-test-modal-id='easy-apply-modal']",
+            "div.artdeco-modal[role='dialog']",
+            "div[aria-label*='Easy Apply']",
+            "div.artdeco-modal__content",
+        ]:
+            modal = self.page.locator(sel).first
+            if await modal.count():
+                return modal
+        return self.page  # fallback to full page if modal not found
+
     async def _fill_page(self):
         resume = self.config["personal"].get("resume_path", "")
+        modal  = await self._get_modal()
 
-        # Resume upload
+        # Resume upload — inside modal only
         if resume:
-            upload = self.page.locator("input[type='file']").first
+            upload = modal.locator("input[type='file']").first
             if await upload.count():
                 try:
                     await upload.set_input_files(resume)
                     await self.sleep(1, 2)
+                    logger.info("[LinkedIn] Resume uploaded.")
                 except Exception:
                     pass
 
-        # Text / number / textarea
-        for inp in await self.page.locator(
-            "input[type='text'], input[type='number'], textarea"
+        # Text / number inputs — inside modal only
+        for inp in await modal.locator(
+            "input[type='text'], input[type='number'], input[type='tel'], textarea"
         ).all():
             try:
-                if await inp.input_value():
+                val = await inp.input_value()
+                if val:
                     continue
                 label = await self.get_label_for(inp)
+                if self._is_junk_label(label):
+                    continue
                 answer = self.qa.answer(label)
                 if answer:
+                    logger.info(f"[LinkedIn] Filling '{label}' => '{answer}'")
                     await self.human_type_el(inp, answer)
             except Exception:
                 pass
 
-        # Selects
-        for sel in await self.page.locator("select").all():
+        # Selects — inside modal only
+        for sel in await modal.locator("select").all():
             try:
                 label  = await self.get_label_for(sel)
+                if self._is_junk_label(label):
+                    continue
                 answer = self.qa.answer(label)
                 opts   = await sel.locator("option").all_inner_texts()
                 match  = next((o for o in opts if answer.lower() in o.lower()), None)
                 if match:
+                    logger.info(f"[LinkedIn] Selecting '{label}' => '{match}'")
                     await sel.select_option(label=match)
             except Exception:
                 pass
 
-        # Radio buttons
-        for radio in await self.page.locator("input[type='radio']").all():
+        # Radio buttons — inside modal only
+        for radio in await modal.locator("input[type='radio']").all():
             try:
                 if await radio.is_checked():
                     continue
                 rid = await radio.get_attribute("id")
-                label_el = self.page.locator(f"label[for='{rid}']")
+                if not rid:
+                    continue
+                label_el = modal.locator(f"label[for='{rid}']")
                 label_text = await label_el.inner_text()
-                fieldset = radio.locator("xpath=ancestor::fieldset").first
-                q_text = await fieldset.locator("legend").inner_text()
+                try:
+                    fieldset = radio.locator("xpath=ancestor::fieldset").first
+                    q_text   = await fieldset.locator("legend").inner_text()
+                except Exception:
+                    q_text = label_text
+                if self._is_junk_label(q_text):
+                    continue
                 answer = self.qa.answer(q_text)
                 if answer.lower() in label_text.lower():
+                    logger.info(f"[LinkedIn] Radio '{q_text}' => '{label_text}'")
                     await radio.click()
             except Exception:
                 pass

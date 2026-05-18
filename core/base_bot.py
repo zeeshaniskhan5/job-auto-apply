@@ -123,6 +123,7 @@ class BaseBot:
                 await asyncio.sleep(3)
 
     async def get_label_for(self, element) -> str:
+        # 1. label[for=id]
         try:
             el_id = await element.get_attribute("id")
             if el_id:
@@ -131,11 +132,22 @@ class BaseBot:
                     return (await label.inner_text()).strip()
         except Exception:
             pass
-        for attr in ("placeholder", "aria-label", "name"):
+        # 2. aria-label / placeholder / name attributes
+        for attr in ("aria-label", "placeholder", "name"):
             try:
                 val = await element.get_attribute(attr)
                 if val:
                     return val.strip()
             except Exception:
                 pass
+        # 3. Nearest preceding label or legend in parent
+        try:
+            parent = element.locator("xpath=ancestor::div[1]")
+            label  = parent.locator("label, legend, span.label").first
+            if await label.count():
+                text = (await label.inner_text()).strip()
+                if text:
+                    return text
+        except Exception:
+            pass
         return ""

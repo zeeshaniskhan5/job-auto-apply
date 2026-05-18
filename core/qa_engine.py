@@ -45,7 +45,7 @@ class QAEngine:
         if any(w in q for w in ["disability", "veteran"]):
             return "No"
 
-        logger.warning(f"No answer found for question: '{question}' — using empty string")
+        logger.debug(f"No answer for: '{question[:60]}' — skipping")
         return ""
 
     def answer_numeric(self, question: str) -> str:
