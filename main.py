@@ -10,12 +10,14 @@ import yaml
 import logging
 import colorlog
 from pathlib import Path
+from datetime import datetime
 
 
 def setup_logging():
-    handler = colorlog.StreamHandler()
-    handler.setFormatter(colorlog.ColoredFormatter(
-        "%(log_color)s%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    # ── Console handler (coloured) ────────────────────────────
+    console = colorlog.StreamHandler(sys.stdout)
+    console.setFormatter(colorlog.ColoredFormatter(
+        "%(log_color)s%(asctime)s  %(levelname)-8s  %(message)s%(reset)s",
         datefmt="%H:%M:%S",
         log_colors={
             "DEBUG":    "cyan",
@@ -25,14 +27,32 @@ def setup_logging():
             "CRITICAL": "bold_red",
         },
     ))
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+    # ── File handler (plain text, saved to logs/) ─────────────
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / f"session_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+    root.addHandler(console)
+    root.addHandler(file_handler)
+
+    logging.info(f"Log file: {log_file.resolve()}")
+    return log_file
 
 
 def load_config(path: str = "config.yaml") -> dict:
     p = Path(path)
     if not p.exists():
         print("\n[ERROR] config.yaml not found.")
-        print("  → Copy config.example.yaml to config.yaml and fill in your details.\n")
+        print("  Copy config.example.yaml to config.yaml and fill in your details.\n")
         sys.exit(1)
     with open(p, encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -65,11 +85,16 @@ def get_bot(key: str, config: dict):
 
 
 async def run_bot(key: str, config: dict):
+    name = PLATFORMS[key][0]
+    log  = logging.getLogger(name)
+    log.info(f"{'='*40}")
+    log.info(f"Starting {name} bot")
+    log.info(f"{'='*40}")
     bot = get_bot(key, config)
     try:
         await bot.run()
     except Exception as e:
-        logging.getLogger(PLATFORMS[key][0]).error(f"Bot crashed: {e}", exc_info=True)
+        log.error(f"Bot crashed: {e}", exc_info=True)
 
 
 async def run_all(config: dict):
@@ -83,8 +108,8 @@ async def run_all(config: dict):
 
 
 async def main():
-    setup_logging()
-    config = load_config()
+    log_file = setup_logging()
+    config   = load_config()
 
     import argparse
     parser = argparse.ArgumentParser()
@@ -95,6 +120,10 @@ async def main():
     if not choice:
         print_menu()
         choice = input("\n   Enter choice: ").strip()
+
+    logging.info(f"Search keywords : {config['search'].get('keywords')}")
+    logging.info(f"Location        : {config['search'].get('location')}")
+    logging.info(f"Max applications: {config['search'].get('max_applications')}")
 
     if choice == "0":
         print("   Goodbye!")
@@ -112,7 +141,10 @@ async def main():
         print("   Invalid choice.")
         sys.exit(1)
 
-    print("\n   Done! Check the logs above for results.")
+    logging.info("=" * 52)
+    logging.info("All bots finished.")
+    logging.info(f"Full log saved to: {log_file.resolve()}")
+    logging.info("=" * 52)
 
 
 if __name__ == "__main__":

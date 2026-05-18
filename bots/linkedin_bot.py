@@ -58,31 +58,42 @@ class LinkedInBot(BaseBot):
             location=location.replace(" ", "%20"),
         )
 
-        logger.info(f"[LinkedIn] Navigating to job search: {keywords} in {location}")
+        logger.info(f"[LinkedIn] Navigating to job search: '{keywords}' in '{location}'")
+        logger.info(f"[LinkedIn] URL: {url}")
         await self.page.goto(url, wait_until="domcontentloaded")
         await self.sleep(4, 6)
 
         page_num = 1
         while self.applied_count < self.max_applications:
-            logger.info(f"[LinkedIn] Scanning page {page_num} for Easy Apply jobs...")
+            logger.info(f"[LinkedIn] ---- Page {page_num} ----")
 
             cards = await self._get_job_cards()
             if not cards:
-                logger.info("[LinkedIn] No job cards found — trying to scroll and retry...")
+                logger.info("[LinkedIn] No job cards found — scrolling and retrying...")
                 await self.page.evaluate("window.scrollTo(0, 300)")
                 await self.sleep(2, 3)
                 cards = await self._get_job_cards()
                 if not cards:
-                    logger.info("[LinkedIn] Still no cards. Stopping.")
+                    logger.warning("[LinkedIn] Still no job cards. Check if the browser is on the right page.")
+                    logger.info(f"[LinkedIn] Current URL: {self.page.url}")
                     break
 
             logger.info(f"[LinkedIn] Found {len(cards)} job cards on page {page_num}.")
 
             for i, card in enumerate(cards):
                 if self.applied_count >= self.max_applications:
+                    logger.info(f"[LinkedIn] Reached max applications ({self.max_applications}). Stopping.")
                     break
                 try:
-                    logger.info(f"[LinkedIn] Checking job {i+1}/{len(cards)}...")
+                    # Try to get job title for logging
+                    title = "Unknown"
+                    try:
+                        title = await card.locator("a.job-card-list__title, h3, .job-card-container__link").first.inner_text(timeout=2000)
+                        title = title.strip()
+                    except Exception:
+                        pass
+
+                    logger.info(f"[LinkedIn] [{i+1}/{len(cards)}] '{title}'")
                     await card.scroll_into_view_if_needed()
                     await card.click()
                     await self.sleep(2, 3)
@@ -95,7 +106,7 @@ class LinkedInBot(BaseBot):
                 break
             page_num += 1
 
-        logger.info(f"[LinkedIn] Finished. Total applied: {self.applied_count}")
+        logger.info(f"[LinkedIn] ---- Session complete. Applied: {self.applied_count} ----")
         await self.stop()
 
     async def _get_job_cards(self) -> list:
@@ -122,27 +133,27 @@ class LinkedInBot(BaseBot):
                 continue
 
         if not apply_btn:
-            logger.info("[LinkedIn] No Easy Apply button — skipping.")
+            logger.info("[LinkedIn] No Easy Apply button — skipping (likely external apply).")
             return
 
-        logger.info("[LinkedIn] Easy Apply found — clicking...")
+        logger.info("[LinkedIn] Easy Apply button found — opening form...")
         await apply_btn.click()
         await self.sleep(2, 3)
 
         for step in range(10):
-            logger.info(f"[LinkedIn] Filling form step {step + 1}...")
+            logger.info(f"[LinkedIn] Form step {step + 1} — filling fields...")
             await self._fill_page()
             await self.sleep(1, 2)
 
             if await self._submit():
                 self.applied_count += 1
-                logger.info(f"[LinkedIn] Applied! Total: {self.applied_count}")
+                logger.info(f"[LinkedIn] SUCCESS — Applied! Total so far: {self.applied_count}")
                 await self.sleep(2, 3)
                 await self._dismiss()
                 return
 
             if not await self._next_step():
-                logger.info("[LinkedIn] Could not advance form — dismissing.")
+                logger.info("[LinkedIn] Could not advance to next step — closing form.")
                 await self._dismiss()
                 return
 
