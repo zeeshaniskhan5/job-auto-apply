@@ -18,18 +18,8 @@ personal:
   portfolio_url: "https://github.com/yourprofile"
 
 # ── Platform Credentials ──────────────────────────────────────
-
-linkedin:
-  email: "your@email.com"
-  password: "yourpassword"
-
-indeed:
-  email: "your@email.com"
-  password: "yourpassword"
-
-naukri:
-  email: "your@email.com"
-  password: "yourpassword"
+# Not required — the bot opens the browser and you log in manually.
+# Sessions are saved after first login so you won't need to log in again.
 
 # ── Job Search Preferences ────────────────────────────────────
 

@@ -21,17 +21,11 @@ class NaukriBot(BaseBot):
     # ── Auth ──────────────────────────────────────────────────
 
     async def login(self):
-        if await self.is_logged_in(HOME_URL, ".nI-gNb-drawer__icon, .nI-gNb-menuItem"):
-            logger.info("[Naukri] Already logged in via saved session.")
-            return
-
-        await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
-        await self.sleep(2, 3)
-        await self.human_type("#usernameField", self.creds["email"])
-        await self.human_type("#passwordField", self.creds["password"])
-        await self.click("button[type='submit']:has-text('Login')")
-        await self.sleep(4, 6)
-        logger.info("[Naukri] Logged in.")
+        await self.wait_for_manual_login(
+            login_url=LOGIN_URL,
+            indicator_selector=".nI-gNb-drawer__icon, .nI-gNb-menuItem, .nI-gNb-log",
+            platform="Naukri",
+        )
 
     async def _bump_profile(self):
         """Refreshes Naukri profile so it appears at top of recruiter searches."""

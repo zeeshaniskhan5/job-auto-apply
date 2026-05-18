@@ -24,17 +24,11 @@ class LinkedInBot(BaseBot):
     # ── Auth ──────────────────────────────────────────────────
 
     async def login(self):
-        if await self.is_logged_in(FEED_URL, "#global-nav"):
-            logger.info("[LinkedIn] Already logged in via saved session.")
-            return
-
-        await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
-        await self.sleep(2, 3)
-        await self.human_type("#username", self.creds["email"])
-        await self.human_type("#password", self.creds["password"])
-        await self.click("button[type='submit']")
-        await self.sleep(4, 6)
-        logger.info("[LinkedIn] Logged in.")
+        await self.wait_for_manual_login(
+            login_url=LOGIN_URL,
+            indicator_selector="#global-nav",
+            platform="LinkedIn",
+        )
 
     # ── Main run loop ─────────────────────────────────────────
 

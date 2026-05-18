@@ -86,14 +86,41 @@ class BaseBot:
         except Exception:
             return False
 
-    async def is_logged_in(self, url: str, indicator_selector: str) -> bool:
-        await self.page.goto(url, wait_until="domcontentloaded")
+    async def wait_for_manual_login(
+        self,
+        login_url: str,
+        indicator_selector: str,
+        platform: str,
+    ):
+        """Open login page, wait for user to log in manually, then take over."""
+        await self.page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
         await self.sleep(2, 3)
+
+        # Check if already logged in via saved session
         try:
-            await self.page.wait_for_selector(indicator_selector, timeout=5000)
-            return True
+            await self.page.wait_for_selector(indicator_selector, timeout=4000)
+            logger.info(f"[{platform}] Already logged in via saved session.")
+            return
         except Exception:
-            return False
+            pass
+
+        # Not logged in — prompt user
+        print(f"\n{'='*55}")
+        print(f"  [{platform}] Browser is open.")
+        print(f"  Please LOG IN manually in the browser window.")
+        print(f"  Bot will continue automatically once login is detected.")
+        print(f"{'='*55}\n")
+        logger.info(f"[{platform}] Waiting for you to log in...")
+
+        # Poll every 3 seconds until logged-in indicator appears
+        while True:
+            try:
+                await self.page.wait_for_selector(indicator_selector, timeout=3000)
+                logger.info(f"[{platform}] Login detected — taking over!")
+                await self.sleep(2, 3)
+                return
+            except Exception:
+                await asyncio.sleep(3)
 
     async def get_label_for(self, element) -> str:
         try:

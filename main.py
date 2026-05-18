@@ -73,16 +73,28 @@ async def run_bot(key: str, config: dict):
 
 
 async def run_all(config: dict):
-    await asyncio.gather(
-        *(run_bot(k, config) for k in PLATFORMS)
+    results = await asyncio.gather(
+        *(run_bot(k, config) for k in PLATFORMS),
+        return_exceptions=True,
     )
+    for key, result in zip(PLATFORMS, results):
+        if isinstance(result, Exception):
+            logging.getLogger(PLATFORMS[key][0]).error(f"Bot failed: {result}")
 
 
 async def main():
     setup_logging()
     config = load_config()
-    print_menu()
-    choice = input("\n   Enter choice: ").strip()
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--platform", choices=["1", "2", "3", "4"], default=None)
+    args = parser.parse_args()
+
+    choice = args.platform
+    if not choice:
+        print_menu()
+        choice = input("\n   Enter choice: ").strip()
 
     if choice == "0":
         print("   Goodbye!")

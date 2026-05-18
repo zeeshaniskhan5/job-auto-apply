@@ -21,26 +21,11 @@ class IndeedBot(BaseBot):
     # ── Auth ──────────────────────────────────────────────────
 
     async def login(self):
-        await self.page.goto(HOME_URL, wait_until="domcontentloaded")
-        await self.sleep(2, 3)
-
-        # Check session via sign-in link absence
-        if not await self.page.locator("a[href*='login'], a[href*='signin']").count():
-            logger.info("[Indeed] Already logged in via saved session.")
-            return
-
-        await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
-        await self.sleep(2, 3)
-
-        email_sel = "input[type='email'], input[name='__email'], #ifl-InputFormField-3"
-        await self.human_type(email_sel, self.creds["email"])
-        await self.click("button[type='submit']")
-        await self.sleep(2, 3)
-
-        await self.human_type("input[type='password']", self.creds["password"])
-        await self.click("button[type='submit']")
-        await self.sleep(4, 6)
-        logger.info("[Indeed] Login attempted — solve CAPTCHA in browser if prompted.")
+        await self.wait_for_manual_login(
+            login_url=LOGIN_URL,
+            indicator_selector="a[href*='resume'], .gnav-logged-in, #indeed-ia-header",
+            platform="Indeed",
+        )
 
     # ── Main run loop ─────────────────────────────────────────
 
@@ -58,8 +43,9 @@ class IndeedBot(BaseBot):
         await self.sleep(3, 5)
 
         while self.applied_count < self.max_applications:
+            await self.sleep(2, 3)
             cards = await self.page.locator(
-                "div.job_seen_beacon, .resultContent"
+                "div.job_seen_beacon, .resultContent, [data-testid='slider_item']"
             ).all()
             if not cards:
                 logger.info("[Indeed] No job cards found.")
