@@ -6,18 +6,33 @@ from core.qa_engine import QAEngine
 
 logger = logging.getLogger(__name__)
 
-LOGIN_URL  = "https://www.linkedin.com/login"
-FEED_URL   = "https://www.linkedin.com/feed"
-JOBS_URL   = (
+LOGIN_URL = "https://www.linkedin.com/login"
+FEED_URL  = "https://www.linkedin.com/feed"
+JOBS_URL  = (
     "https://www.linkedin.com/jobs/search/"
     "?f_LF=f_AL&keywords={keywords}&location={location}"
 )
+
+# LinkedIn changes class names often — try multiple selectors
+JOB_CARD_SELECTORS = [
+    "li.scaffold-layout__list-item",
+    ".jobs-search-results__list-item",
+    "div[data-job-id]",
+    ".job-card-container",
+    ".jobs-search-two-pane__job-card-container--viewport-tracking-0",
+]
+
+APPLY_BTN_SELECTORS = [
+    "button.jobs-apply-button",
+    "button[aria-label*='Easy Apply']",
+    "button:has-text('Easy Apply')",
+    ".jobs-apply-button--top-card",
+]
 
 
 class LinkedInBot(BaseBot):
     def __init__(self, config: dict):
         super().__init__(config, "linkedin")
-        self.creds  = config["linkedin"]
         self.search = config["search"]
         self.qa     = QAEngine(config)
 
@@ -42,46 +57,80 @@ class LinkedInBot(BaseBot):
             keywords=keywords.replace(" ", "%20"),
             location=location.replace(" ", "%20"),
         )
+
+        logger.info(f"[LinkedIn] Navigating to job search: {keywords} in {location}")
         await self.page.goto(url, wait_until="domcontentloaded")
-        await self.sleep(3, 5)
+        await self.sleep(4, 6)
 
+        page_num = 1
         while self.applied_count < self.max_applications:
-            cards = await self.page.locator(".job-card-container").all()
-            if not cards:
-                logger.info("[LinkedIn] No more job cards.")
-                break
+            logger.info(f"[LinkedIn] Scanning page {page_num} for Easy Apply jobs...")
 
-            for card in cards:
+            cards = await self._get_job_cards()
+            if not cards:
+                logger.info("[LinkedIn] No job cards found — trying to scroll and retry...")
+                await self.page.evaluate("window.scrollTo(0, 300)")
+                await self.sleep(2, 3)
+                cards = await self._get_job_cards()
+                if not cards:
+                    logger.info("[LinkedIn] Still no cards. Stopping.")
+                    break
+
+            logger.info(f"[LinkedIn] Found {len(cards)} job cards on page {page_num}.")
+
+            for i, card in enumerate(cards):
                 if self.applied_count >= self.max_applications:
                     break
                 try:
+                    logger.info(f"[LinkedIn] Checking job {i+1}/{len(cards)}...")
+                    await card.scroll_into_view_if_needed()
                     await card.click()
                     await self.sleep(2, 3)
                     await self._apply()
                 except Exception as e:
-                    logger.warning(f"[LinkedIn] Skipping card: {e}")
+                    logger.warning(f"[LinkedIn] Skipping card {i+1}: {e}")
 
             if not await self._next_page():
+                logger.info("[LinkedIn] No more pages.")
                 break
+            page_num += 1
 
+        logger.info(f"[LinkedIn] Finished. Total applied: {self.applied_count}")
         await self.stop()
+
+    async def _get_job_cards(self) -> list:
+        for sel in JOB_CARD_SELECTORS:
+            cards = await self.page.locator(sel).all()
+            if cards:
+                return cards
+        return []
 
     # ── Apply flow ────────────────────────────────────────────
 
     async def _apply(self):
-        btn = self.page.locator("button.jobs-apply-button").first
-        try:
-            await btn.wait_for(timeout=5000)
-            text = await btn.inner_text()
-            if "Easy Apply" not in text:
-                return
-            await btn.click()
-        except PlaywrightTimeout:
+        # Find Easy Apply button using multiple selectors
+        apply_btn = None
+        for sel in APPLY_BTN_SELECTORS:
+            candidate = self.page.locator(sel).first
+            try:
+                await candidate.wait_for(timeout=3000)
+                text = await candidate.inner_text()
+                if "Easy Apply" in text:
+                    apply_btn = candidate
+                    break
+            except Exception:
+                continue
+
+        if not apply_btn:
+            logger.info("[LinkedIn] No Easy Apply button — skipping.")
             return
 
+        logger.info("[LinkedIn] Easy Apply found — clicking...")
+        await apply_btn.click()
         await self.sleep(2, 3)
 
-        for _ in range(10):
+        for step in range(10):
+            logger.info(f"[LinkedIn] Filling form step {step + 1}...")
             await self._fill_page()
             await self.sleep(1, 2)
 
@@ -93,6 +142,7 @@ class LinkedInBot(BaseBot):
                 return
 
             if not await self._next_step():
+                logger.info("[LinkedIn] Could not advance form — dismissing.")
                 await self._dismiss()
                 return
 
@@ -102,13 +152,14 @@ class LinkedInBot(BaseBot):
         resume = self.config["personal"].get("resume_path", "")
 
         # Resume upload
-        upload = self.page.locator("input[type='file']").first
-        if resume and await upload.count():
-            try:
-                await upload.set_input_files(resume)
-                await self.sleep(1, 2)
-            except Exception:
-                pass
+        if resume:
+            upload = self.page.locator("input[type='file']").first
+            if await upload.count():
+                try:
+                    await upload.set_input_files(resume)
+                    await self.sleep(1, 2)
+                except Exception:
+                    pass
 
         # Text / number / textarea
         for inp in await self.page.locator(
@@ -153,11 +204,7 @@ class LinkedInBot(BaseBot):
                 pass
 
     async def _next_step(self) -> bool:
-        for label in [
-            "Continue to next step",
-            "Review your application",
-            "Next",
-        ]:
+        for label in ["Continue to next step", "Review your application", "Next"]:
             btn = self.page.locator(f"button:has-text('{label}')").first
             if await btn.count():
                 await btn.click()
@@ -166,26 +213,36 @@ class LinkedInBot(BaseBot):
         return False
 
     async def _submit(self) -> bool:
-        btn = self.page.locator("button:has-text('Submit application')").first
-        if await btn.count():
-            await btn.click()
-            await self.sleep(2, 3)
-            return True
+        for sel in [
+            "button:has-text('Submit application')",
+            "button[aria-label*='Submit application']",
+        ]:
+            btn = self.page.locator(sel).first
+            if await btn.count():
+                await btn.click()
+                await self.sleep(2, 3)
+                return True
         return False
 
     async def _dismiss(self):
         for sel in [
             "button[aria-label='Dismiss']",
+            "button[aria-label='Dismiss']",
             "button.artdeco-modal__dismiss",
+            "button:has-text('Done')",
         ]:
             if await self.click(sel, timeout=3000):
                 await self.sleep(1, 2)
                 return
 
     async def _next_page(self) -> bool:
-        btn = self.page.locator("button[aria-label='View next page']").first
-        if await btn.count() and await btn.is_enabled():
-            await btn.click()
-            await self.sleep(3, 5)
-            return True
+        for sel in [
+            "button[aria-label='View next page']",
+            "button[aria-label='Next']",
+        ]:
+            btn = self.page.locator(sel).first
+            if await btn.count() and await btn.is_enabled():
+                await btn.click()
+                await self.sleep(3, 5)
+                return True
         return False
